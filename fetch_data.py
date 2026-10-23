@@ -18,7 +18,6 @@ from datetime import datetime, timezone
 ROOT = os.path.dirname(os.path.abspath(__file__))
 HOLDINGS_URL = 'https://lima-spielhofen.com/data/holdings.json'
 OUT = sys.argv[sys.argv.index('--out') + 1] if '--out' in sys.argv else os.path.join(ROOT, 'out')
-FRED_KEY = os.environ.get('FRED_API_KEY', '')
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
 
 # One cookie-carrying opener for everything; Yahoo wants a session cookie + crumb.
@@ -199,35 +198,40 @@ FRED_SERIES = {
 
 
 def fred_series(sid, limit):
-    url = ('https://api.stlouisfed.org/fred/series/observations?'
-           f'series_id={sid}&api_key={FRED_KEY}&sort_order=desc&limit={limit + 5}&file_type=json')
-    j = get_json(url)
-    if not j or 'observations' not in j:
+    """Newest `limit` observations, newest first, from FRED's public CSV download (no API key needed)."""
+    start = f'{datetime.now(timezone.utc).year - 4}-01-01'
+    url = f'https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}&cosd={start}'
+    for i in range(3):
+        try:
+            with OPENER.open(url, timeout=30) as r:
+                lines = r.read().decode('utf-8').splitlines()[1:]
+            break
+        except Exception:  # noqa
+            time.sleep(3 * (i + 1))
+    else:
         return None
     vals, dates = [], []
-    for o in j['observations']:
-        if o.get('value') in (None, '.', ''):
-            continue
+    for line in reversed(lines):
+        date, _, value = line.partition(',')
         try:
-            vals.append(float(o['value']))
-            dates.append(o['date'])
+            vals.append(float(value))
+            dates.append(date)
         except ValueError:
-            continue
+            continue   # '.' or empty: no value that day
         if len(vals) >= limit:
             break
     return {'values': vals, 'dates': dates}
 
 
 def build_fred():
-    if not FRED_KEY:
-        print('FRED_API_KEY missing — skipping FRED', file=sys.stderr)
-        return None
     out = {}
     print(f'FRED: {len(FRED_SERIES)} series')
     for sid, lim in FRED_SERIES.items():
         s = fred_series(sid, lim)
         if s and s['values']:
             out[sid] = s
+        else:
+            print('  ! FRED', sid, 'failed', file=sys.stderr)
         time.sleep(0.2)
     return {'ts': int(time.time()), 'generated': datetime.now(timezone.utc).isoformat(timespec='seconds'),
             'series': out}
