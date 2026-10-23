@@ -203,7 +203,9 @@ def fred_series(sid, limit):
     url = f'https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}&cosd={start}'
     for i in range(3):
         try:
-            with OPENER.open(url, timeout=30) as r:
+            # Not OPENER: this endpoint stalls for many User-Agents (browser-like ones included) but answers curl's at once.
+            req = urllib.request.Request(url, headers={'User-Agent': 'curl/8.5.0'})
+            with urllib.request.urlopen(req, timeout=30) as r:
                 lines = r.read().decode('utf-8').splitlines()[1:]
             break
         except Exception:  # noqa
